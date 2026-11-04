@@ -116,53 +116,53 @@ jobs:
       - name: Deploy to AWS EC2 via SSH
         if: steps.check-secrets.outputs.has_secrets == 'true'
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          JWT_EXPIRES_IN: ${{ secrets.JWT_EXPIRES_IN || '7d' }}
+          PORT: ${{ secrets.PORT || '5000' }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           port: ${{ secrets.EC2_PORT || 22 }}
           envs: MONGODB_URI,JWT_SECRET,JWT_EXPIRES_IN,PORT
-        env:
-          MONGODB_URI: ${{ secrets.MONGODB_URI }}
-          JWT_SECRET: ${{ secrets.JWT_SECRET }}
-          JWT_EXPIRES_IN: ${{ secrets.JWT_EXPIRES_IN || '7d' }}
-          PORT: ${{ secrets.PORT || '5000' }}
-        script: |
-          set -e
-          APP_DIR="${{ secrets.EC2_APP_DIR || '~/app' }}"
-          echo "Deploying RFQ Auction System to ${APP_DIR}..."
+          script: |
+            set -e
+            APP_DIR="${{ secrets.EC2_APP_DIR || '~/app' }}"
+            echo "Deploying RFQ Auction System to ${APP_DIR}..."
 
-          mkdir -p "$APP_DIR"
-          cd "$APP_DIR"
+            mkdir -p "$APP_DIR"
+            cd "$APP_DIR"
 
-          # Check if git repository is already cloned
-          if [ ! -d ".git" ]; then
-            echo "Cloning repository..."
-            git clone https://github.com/mayankchaudharyyy/devops-final.git .
-          else
-            echo "Fetching latest changes..."
-            git fetch origin main
-            git reset --hard origin/main
-          fi
+            # Check if git repository is already cloned
+            if [ ! -d ".git" ]; then
+              echo "Cloning repository..."
+              git clone https://github.com/mayankchaudharyyy/devops-final.git .
+            else
+              echo "Fetching latest changes..."
+              git fetch origin main
+              git reset --hard origin/main
+            fi
 
-          # Generate secure production .env for Docker Compose
-          echo "Writing environment configuration..."
-          cat <<EOF > .env
-          PORT=${PORT}
-          NODE_ENV=production
-          MONGODB_URI=${MONGODB_URI}
-          JWT_SECRET=${JWT_SECRET}
-          JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
-          EOF
+            # Generate secure production .env for Docker Compose
+            echo "Writing environment configuration..."
+            cat <<EOF > .env
+            PORT=${PORT}
+            NODE_ENV=production
+            MONGODB_URI=${MONGODB_URI}
+            JWT_SECRET=${JWT_SECRET}
+            JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
+            EOF
 
-          # Restart Docker containers with zero stale state
-          echo "Rebuilding and restarting Docker containers..."
-          docker compose down || true
-          docker compose up -d --build
+            # Restart Docker containers with zero stale state
+            echo "Rebuilding and restarting Docker containers..."
+            docker compose down || true
+            docker compose up -d --build
 
-          # Healthcheck verification
-          echo "Checking container health..."
-          sleep 10
-          docker compose ps
-          echo "Deployment completed successfully!"
+            # Healthcheck verification
+            echo "Checking container health..."
+            sleep 10
+            docker compose ps
+            echo "Deployment completed successfully!"
 

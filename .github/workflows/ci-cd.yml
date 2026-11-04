@@ -1,0 +1,168 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  # -------------------------------------------------------------
+  # Job 1: Backend Checks (Node.js setup, dependencies, syntax validation)
+  # -------------------------------------------------------------
+  backend-checks:
+    name: Backend Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install Backend Dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Run Backend Syntax & Validation Checks
+        working-directory: backend
+        run: |
+          echo "Validating backend server and app structure..."
+          node --check server.js
+          node --check src/app.js
+          node --check src/config/db.js
+          npm test
+
+  # -------------------------------------------------------------
+  # Job 2: Frontend Checks (ESLint and production Vite build)
+  # -------------------------------------------------------------
+  frontend-checks:
+    name: Frontend Build & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Frontend Dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run Frontend Linter
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Run Frontend Production Build
+        working-directory: frontend
+        run: npm run build
+        env:
+          VITE_API_URL: /api
+          VITE_SOCKET_URL: /
+
+  # -------------------------------------------------------------
+  # Job 3: Docker Images Build & Validation
+  # -------------------------------------------------------------
+  docker-build:
+    name: Build Docker Images
+    needs: [backend-checks, frontend-checks]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate Docker Compose Configuration
+        run: docker compose config
+
+      - name: Build Docker Containers
+        run: docker compose build
+
+  # -------------------------------------------------------------
+  # Job 4: Deployment to AWS EC2 via SSH
+  # (Only executed on pushes to main if EC2 secrets are configured)
+  # -------------------------------------------------------------
+  deploy:
+    name: Deploy to AWS EC2
+    needs: [docker-build]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - name: Check Deployment Secrets
+        id: check-secrets
+        run: |
+          if [ -n "${{ secrets.EC2_HOST }}" ] && [ -n "${{ secrets.EC2_USER }}" ] && [ -n "${{ secrets.EC2_SSH_KEY }}" ]; then
+            echo "has_secrets=true" >> $GITHUB_OUTPUT
+            echo "All required AWS EC2 secrets are configured."
+          else
+            echo "has_secrets=false" >> $GITHUB_OUTPUT
+            echo "::notice ::Skipping deployment: EC2 credentials (EC2_HOST, EC2_USER, EC2_SSH_KEY) are not set in GitHub Secrets."
+          fi
+
+      - name: Deploy to AWS EC2 via SSH
+        if: steps.check-secrets.outputs.has_secrets == 'true'
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: ${{ secrets.EC2_PORT || 22 }}
+          envs: MONGODB_URI,JWT_SECRET,JWT_EXPIRES_IN,PORT
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          JWT_EXPIRES_IN: ${{ secrets.JWT_EXPIRES_IN || '7d' }}
+          PORT: ${{ secrets.PORT || '5000' }}
+        script: |
+          set -e
+          APP_DIR="${{ secrets.EC2_APP_DIR || '~/app' }}"
+          echo "Deploying RFQ Auction System to ${APP_DIR}..."
+
+          mkdir -p "$APP_DIR"
+          cd "$APP_DIR"
+
+          # Check if git repository is already cloned
+          if [ ! -d ".git" ]; then
+            echo "Cloning repository..."
+            git clone https://github.com/mayankchaudharyyy/devops-final.git .
+          else
+            echo "Fetching latest changes..."
+            git fetch origin main
+            git reset --hard origin/main
+          fi
+
+          # Generate secure production .env for Docker Compose
+          echo "Writing environment configuration..."
+          cat <<EOF > .env
+          PORT=${PORT}
+          NODE_ENV=production
+          MONGODB_URI=${MONGODB_URI}
+          JWT_SECRET=${JWT_SECRET}
+          JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
+          EOF
+
+          # Restart Docker containers with zero stale state
+          echo "Rebuilding and restarting Docker containers..."
+          docker compose down || true
+          docker compose up -d --build
+
+          # Healthcheck verification
+          echo "Checking container health..."
+          sleep 10
+          docker compose ps
+          echo "Deployment completed successfully!"
+

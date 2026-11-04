@@ -2,7 +2,18 @@ import { useEffect, useMemo } from 'react';
 import { io } from 'socket.io-client';
 import { useAuth } from './useAuth';
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'https://bidflow-rfq.onrender.com';
+const getSocketUrl = () => {
+  const envUrl = import.meta.env.VITE_SOCKET_URL;
+  if (envUrl && envUrl !== '/') {
+    return envUrl;
+  }
+  if (import.meta.env.DEV) {
+    return 'http://localhost:5000';
+  }
+  return typeof window !== 'undefined' ? window.location.origin : '/';
+};
+
+const SOCKET_URL = getSocketUrl();
 
 export function useSocket() {
   const { token } = useAuth();
